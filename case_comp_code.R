@@ -1,3 +1,5 @@
+# Code for the final XGBoost Model cumulating stuff, marginal effects, and game/situational effects
+
 library(tidyverse)
 library(dplyr)
 library(caret)
@@ -8,11 +10,17 @@ library(tidymodels)
 library(finetune)
 library(vip)
 
-# setwd("C:/Users/alexo/Downloads")
+# setwd()
+
+#### Initial Data Manipulation ####
+
+# Read in 2023 PBP Data
 read_csv("savantpbp23.csv") -> pbp_23
 
 pbp_23 %>%
   filter(game_type == "R") -> pbp_23
+
+# Read in predictions from Stuff Model
 
 filename <- file.choose()
 stuff_preds <- readRDS(filename)
@@ -23,15 +31,14 @@ pbp_23 <- pbp_23 %>%
               dplyr::select(game_pk:pitch_number, stuff),
             by = c("game_pk", "pitcher", "at_bat_number", "pitch_number"))
 
+# Graphs to look at data distribution
+
 # pbp_23 %>%
 #   ggplot(aes(stuff)) +
 #   geom_density()
 
-
 # pbp_23 %>%
 #   arrange(delta_run_exp) -> pbp_23
-
-#  %>% arrange(desc(delta_run_exp))
 
 pbp_23 %>%
   filter(description == "foul") -> fouls
@@ -40,9 +47,11 @@ pbp_23 %>%
 #   ggplot(aes(delta_run_exp)) +
 #   geom_density()
 
+# Filtering out non pitches
 fouls %>%
   filter(is.na(events)) -> fouls_filtered
 
+# DRE Distribution
 pbp_23 %>%
   ggplot(aes(delta_run_exp)) +
   geom_density(fill = "#041E42", color = "#bf0d3e") +
@@ -62,6 +71,7 @@ fouls_filtered %>%
   xlim(-0.2, 0)
   #xlim(-0.15, 0)
 
+#### Modeling Process ####
 pbp_23 %>%
   arrange(game_date, game_pk, inning, inning_topbot, at_bat_number, pitch_number) %>%
   group_by(game_pk, pitcher, at_bat_number) %>%
@@ -152,18 +162,18 @@ data_oH <- data_oH[complete.cases(data_oH),]
 data_model <- data_oH[, -which(names(data_oH) == "rowIndex")]
 
 
-#Split the data
+# Split the data
 set.seed(1)
 split <- initial_split(data_model, prop = 0.6)
 train <- training(split)
 test <- testing(split)
 
-#3-fold Cross Validation
+# 3-fold Cross Validation
 set.seed(2)
 folds <- vfold_cv(train, v = 5)
 folds
 
-#Create the formula
+# Create the formula
 formula <-
   recipe(delta_run_exp ~ .,
          data = data_model)
@@ -181,10 +191,10 @@ specifications <-
   set_engine("xgboost") %>%
   set_mode("regression")
 
-#Match the specifications with the formula
+# Match the specifications with the formula
 workflow <- workflow(formula, specifications)
 
-#This is the code to add a grid
+# This is the code to add a grid
 # xgb_grid <- workflow %>%
 #   parameters() %>%
 #   update(
@@ -196,10 +206,10 @@ workflow <- workflow(formula, specifications)
 #   ) %>%
 #   grid_max_entropy(size = 50)
 
-#This allows you to process in parallel. Saves a lot of time!
+# This allows you to process in parallel. Saves a lot of time!
 doParallel::registerDoParallel(cores = 8)
 
-#Use tune_race_anova to tune the model
+# Use tune_race_anova to tune the model
 set.seed(3)
 
 xgb_rs <- tune_race_anova(
@@ -211,7 +221,7 @@ xgb_rs <- tune_race_anova(
                          burn_in = 2)
 )
 
-#Examine how the racing went/some of the hyperparameters
+# Examine how the racing went/some of the hyperparameters
 plot_race(xgb_rs)
 autoplot(xgb_rs)
 
@@ -249,6 +259,7 @@ data_pred %>%
   summarise(avg = mean(fitted)) %>%
   view()
 
+# Marginal Effects
 # 0 strikes: +0.006434
 # 1 strike: +0.012616
 
@@ -295,10 +306,10 @@ data_pred %>%
 # 
 # write_csv(fb_ratios, "fb_ratios.csv")
 
-
-
 # all pitches; min 250 obs; 230 players
 # 2-strike pitches; min 100 obs; 210 players
+
+#### Creating Graphs and Analysis ####
 
 fb_pred %>%
   filter(strikes == 2) %>%
@@ -325,7 +336,6 @@ temp %>%
   filter(obs >= 125) %>%
   view()
 
-  
 #cor(temp$Mean_FBR, temp$FBR_plus)
 
 data_pred %>%
@@ -419,7 +429,7 @@ p_heatmap %>%
         )
         #axis.text = element_text(size = 12),)
 
-#---- generate data heatmap example
+# generate data heatmap example
 heatmap_grid <- expand_grid(
   plate_x = seq(from=min(data_pred$plate_x), 
           to=max(data_pred$plate_x), 
@@ -507,14 +517,10 @@ data_pred %>%
   xlim(-1.5, 1.5) +
   ylim(0, 5)
 
-
-  
-  
-
 # judge: 592450
 # nootbar: 663457
 
-#---- generate re24
+# generate re24
 
 data_pred %>%
   filter(description == "foul") %>%
